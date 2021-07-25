@@ -43,6 +43,7 @@
 #include "clang/Driver/Options.h"
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ParentMapContext.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Mangle.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -93,6 +94,19 @@ struct InputFile {
 	map<Stmt*, map<Stmt*, long long int> > loopInstructionID;
 	map<Stmt*, relative_loop_inst_id> loopInstID;
 	stack <struct Node> NodeStack;
+	set<std::string> declRefSet;
+	int Addcount;
+	int Subcount;
+	int Mulcount;
+	int Divcount;
+	int Cmpcount;
+	int Bitcount;
+	int Logcount;
+	int Assigncount;
+	int Combcount;
+	int Constcount;
+	int DediDeclRefcount; 
+	int TotalDeclRefcount; 
 };
 
 /*we need a stack of active input files, to know which constructs belong to
@@ -296,6 +310,7 @@ public:
     void visitNodes(Stmt *st, vector<Stmt*> & nodes_list) {
       if (!st)
 	return;
+
       nodes_list.push_back(st);
       if (CapturedStmt *CPTSt = dyn_cast<CapturedStmt>(st)) {
         visitNodes(CPTSt->getCapturedStmt(), nodes_list);
@@ -395,7 +410,10 @@ public:
 	Stmt *st = stmt;
 	std::string inductionVar = std::string();
 	if (OMPExecutableDirective *OMPLD = dyn_cast<OMPExecutableDirective>(stmt))
-	  st = OMPLD->getInnermostCapturedStmt()->getCapturedStmt();
+        {
+          CapturedStmt* cps =  OMPLD->getInnermostCapturedStmt();
+	  st = cps->getCapturedStmt();
+        } 
 	if (isa<DoStmt>(st) || isa<ForStmt>(st) || isa<WhileStmt>(st)) {
           if (ForStmt *fstmt = dyn_cast<ForStmt>(st)) {
 	    if (UnaryOperator *unop = dyn_cast<UnaryOperator>(fstmt->getInc())) {
@@ -426,7 +444,12 @@ public:
         if (WhileStmt *whst = dyn_cast<WhileStmt>(st))
           body = whst->getBody();
         std:string snippet = getSourceSnippet(body->getSourceRange(), true, true);
-
+/*
+        string snippet;
+        llvm::raw_string_ostream outstream(snippet);
+        //body->printPretty(outstream, NULL, PrintingPolicy(lo));
+        body->dump(outstream, *astContext);
+*/
         N.id = currFile.functionLoopID[currFile.mapFunctionName[st]][st];
         N.sline = StartLocation.getSpellingLineNumber();
         N.scol = StartLocation.getSpellingColumnNumber();
@@ -446,6 +469,19 @@ public:
 
 	currFile.labels += "\"pragma type\":\"" + clauseType["pragma type"] + "\",\n";
 	
+        currFile.labels += "\"Addcount\":\"" + to_string(currFile.Addcount) + "\",\n";
+        currFile.labels += "\"Subcount\":\"" + to_string(currFile.Subcount) + "\",\n";
+        currFile.labels += "\"Mulcount\":\"" + to_string(currFile.Mulcount) + "\",\n";
+        currFile.labels += "\"Divcount\":\"" + to_string(currFile.Divcount) + "\",\n";
+        currFile.labels += "\"Cmpcount\":\"" + to_string(currFile.Cmpcount) + "\",\n";
+        currFile.labels += "\"Bitcount\":\"" + to_string(currFile.Bitcount) + "\",\n";
+        currFile.labels += "\"Logcount\":\"" + to_string(currFile.Logcount) + "\",\n";
+        currFile.labels += "\"Assigncount\":\"" + to_string(currFile.Assigncount) + "\",\n";
+        currFile.labels += "\"Combcount\":\"" + to_string(currFile.Combcount) + "\",\n";
+        currFile.labels += "\"Constcount\":\"" + to_string(currFile.Constcount) + "\",\n";
+        currFile.labels += "\"DediDeclRefcount\":\"" + to_string(currFile.DediDeclRefcount) + "\",\n";
+        currFile.labels += "\"TotalDeclRefcount\":\"" + to_string(currFile.TotalDeclRefcount) + "\",\n";
+
         currFile.labels += "\"ordered\":\"" + ((clauseType.count("ordered") > 0) ? (clauseType["ordered"]) : "false") + "\",\n";
         currFile.labels += "\"offload\":\"" + ((clauseType.count("offload") > 0) ? (clauseType["offload"]) : "false") + "\",\n";
 	currFile.labels += "\"multiversioned\":\""+ ((clauseType.count("multiversioned") > 0) ? (clauseType["multiversioned"]) : "false") + "\"";
@@ -471,6 +507,7 @@ public:
 	  currFile.labels += ",\n\"map tofrom\":[" + ((clauseType.count("map3") > 0) ? (clauseType["map3"]) : "") + "]";
         if (clauseType.count("dependence list") > 0)
   	  currFile.labels += ",\n\"dependence list\":[" + ((clauseType.count("dependence list") > 0) ? (clauseType["dependence list"]) : "") + "]";
+
         if (ClDCSnippet == true)
 	  currFile.labels += ",\n\"code snippet\":[" + snippet + "]";
 	currFile.labels += "\n},\n";
@@ -482,6 +519,19 @@ public:
       struct Node root;
 
       newfile.filename = filename;
+      newfile.Addcount = 0;
+      newfile.Subcount = 0;
+      newfile.Mulcount = 0;
+      newfile.Divcount = 0;
+      newfile.Cmpcount = 0;
+      newfile.Bitcount = 0;
+      newfile.Logcount = 0;
+      newfile.Assigncount = 0;
+      newfile.Combcount = 0;
+      newfile.Constcount = 0;
+      newfile.DediDeclRefcount = 0;
+      newfile.TotalDeclRefcount = 0;
+
       FileStack.push(newfile);
 
       root.id = ++opCount;
@@ -577,12 +627,118 @@ public:
         clauses["dependence list"] += ",\"" + (directive + " - object id : " + std::to_string((opCount - 1))) + "\"";
     }
 
+
+    void statList(vector<Stmt*>& nodelist)
+    {
+      struct InputFile& currFile = FileStack.top();
+      //errs() << nodelist.size() << "\n" ;
+      for(auto& x:nodelist)
+      {
+        Stmt::StmtClass cls = x->getStmtClass();
+        errs() << "StmtClass: " << cls << ":" << x->getStmtClassName() << "\n";
+        if (isa<IntegerLiteral>(x))
+        {
+          IntegerLiteral *il = dyn_cast<IntegerLiteral>(x);
+          currFile.Constcount++;
+          //errs() << "IntegerLiteral:" << il->getValue()  << " count = " << currFile.Constcount << "\n";
+        }
+        else if (isa<FloatingLiteral>(x))
+        {
+          FloatingLiteral *fl = dyn_cast<FloatingLiteral>(x);
+          currFile.Constcount++;
+//          errs() << "FloatingLiteral:" << fl->getValue()  << " count = " << currFile.Constcount << "\n";
+          //errs() << "FloatingLiteral count = " << currFile.Constcount << "\n";
+        }
+        else if (isa<BinaryOperator>(x))
+        {
+          BinaryOperator *bo = dyn_cast<BinaryOperator>(x);
+          BinaryOperator::Opcode op = bo->getOpcode(); 
+          switch (op) {
+            case BO_Add:
+	      currFile.Addcount++;
+              //errs() << "Add, count: " << currFile.Addcount << "\n";
+              break;
+            case BO_Sub:
+	      currFile.Subcount++;
+              //errs() << "Sub, count: " << currFile.Subcount << "\n";
+              break;
+            case BO_Mul:
+	      currFile.Mulcount++;
+              //errs() << "Mul, count: " << currFile.Mulcount << "\n";
+              break;
+            case BO_Div:
+	      currFile.Divcount++;
+              //errs() << "Div, count: " << currFile.Divcount << "\n";
+              break;
+            case BO_Cmp:
+            case BO_LT:
+            case BO_GT:
+            case BO_LE:
+            case BO_GE:
+            case BO_EQ:
+            case BO_NE:
+	      currFile.Cmpcount++;
+              //errs() << "Cmp, count: " << currFile.Cmpcount << "\n";
+              break;
+            case BO_And:
+            case BO_Xor:
+            case BO_Or:
+	      currFile.Bitcount++;
+              //errs() << "Bit, count: " << currFile.Bitcount << "\n";
+              break;
+            case BO_LAnd:
+            case BO_LOr:
+	      currFile.Logcount++;
+              //errs() << "Log, count: " << currFile.Logcount << "\n";
+              break;
+            case BO_Assign:
+	      currFile.Assigncount++;
+              //errs() << "Assign, count: " << currFile.Assigncount << "\n";
+              break;
+            case BO_MulAssign:
+            case BO_DivAssign:
+            case BO_RemAssign:
+            case BO_AddAssign:
+            case BO_SubAssign:
+            case BO_ShlAssign:
+            case BO_ShrAssign:
+            case BO_AndAssign:
+            case BO_XorAssign:
+            case BO_OrAssign:
+	      currFile.Combcount++;
+              //errs() << "Comb, count: " << currFile.Combcount << "\n";
+              break;
+            default:
+            // We can't reduce this case; just treat it normally.
+              break; 
+          }
+        }
+        else if (isa<DeclRefExpr>(x))
+        {
+          DeclRefExpr *dre = dyn_cast<DeclRefExpr>(x);
+          //errs() << "DeclRefExpr StmtClass: " << cls << ":" << x->getStmtClassName() << "\n";
+          DeclarationNameInfo dlnameInfo = dre->getNameInfo();
+          DeclarationName dlname = dlnameInfo.getName();
+	  std::string declName = dlname.getAsString();
+	  currFile.TotalDeclRefcount++;
+	  if(currFile.declRefSet.count(declName) == 0)
+          {
+	      currFile.declRefSet.insert(declName);	
+	      currFile.DediDeclRefcount++;
+          }
+          //errs() << "DeclRefExpr name: " << declName  << " set count: " << currFile.declRefSet.size() << "\n" ;
+        }
+      }
+    }
+
     /*associate the information of some node in the AST to it's sub tree. Important to normalize
      * standart information on each loop.*/
     void associateEachLoopInside(OMPExecutableDirective *OMPED, map<string, string> & clauses) {
       struct InputFile& currFile = FileStack.top();
       vector<Stmt*> nodes_list;
       visitNodes(OMPED, nodes_list);
+      llvm::outs() << "associateEachLoopInside vector size: " << nodes_list.size() << "\n";
+      statList(nodes_list);
 
       if (currFile.visited.count(OMPED) != 0)
 	return;
@@ -599,6 +755,12 @@ public:
 	  std::string snippet = std::string();
 	  if (ClDCSnippet == true)
 	    snippet = getSourceSnippet(OMPED->getInnermostCapturedStmt()->getSourceRange(), true, true);
+/*
+        llvm::raw_string_ostream outstream(snippet);
+        //body->printPretty(outstream, NULL, PrintingPolicy(lo));
+        OMPED->getInnermostCapturedStmt()->dump(outstream, *astContext);
+        //errs() << "loop body: " << snippet << "\n"; 
+*/
 	  insertStmtDirectives(OMPED, "ordered", snippet, clauses);
       }
 
@@ -607,6 +769,11 @@ public:
 	std::string snippet = std::string();
 	if (ClDCSnippet == true)
           snippet = getSourceSnippet(OMPAD->getInnermostCapturedStmt()->getSourceRange(), true, true);
+/*
+        llvm::raw_string_ostream outstream(snippet);
+        //body->printPretty(outstream, NULL, PrintingPolicy(lo));
+        OMPAD->getInnermostCapturedStmt()->dump(outstream, *astContext);
+*/
         if (OMPAD->getNumClauses() > 0) {
 	  if (isa<OMPCaptureClause>(OMPED->getClause(0)))
             insertStmtDirectives(OMPAD, "atomic capture", snippet, clauses);
@@ -683,7 +850,7 @@ public:
       }
 
       if (OMPLoopDirective *OMPLD = dyn_cast<OMPLoopDirective>(OMPED)) {
-        CreateLoopDirectiveNode(OMPLD, clauses);
+        CreateLoopDirectiveNode(OMPED, clauses);
       }
     }
 
@@ -693,6 +860,12 @@ public:
      * instructions inside a loop */
     void recoverCodeSnippetsID(Stmt *st, map<Stmt*, long long int> & mapped_statments, long long int loopID) {
       string snippet = getSourceSnippet(st->getSourceRange(), true, false);
+/*
+      string snippet;
+      llvm::raw_string_ostream outstream(snippet);
+      //body->printPretty(outstream, NULL, PrintingPolicy(lo));
+      st->dump(outstream, *astContext);
+*/
       // The separator ref vector have the following format:
       // <line, column>, where that is the position of the character ';' in the source code
       // and the position of the vector is the relative id;
@@ -804,16 +977,18 @@ public:
 	}
       return true;
     }
-
     /*visits all nodes of type stmt*/
     virtual bool VisitStmt(Stmt *st) {
+        Stmt::StmtClass cls = st->getStmtClass();
 	const SourceManager& mng = astContext->getSourceManager();
+
         if ((st->getBeginLoc().isInvalid()) || 
 	    (mng.isInSystemHeader(st->getBeginLoc()))) {
               return true;
         } 
         /*skip non-scope generating statements (returning true resumes AST
         traversal)*/
+
         if (!isa<OMPExecutableDirective>(st) && !isa<DoStmt>(st) 
 		&& !isa<ForStmt>(st) && !isa<WhileStmt>(st)) {
           return true;
@@ -821,13 +996,15 @@ public:
 
 	if (OMPExecutableDirective *OMPED = dyn_cast<OMPExecutableDirective>(st)) {
 	  map<string, string> clauses;
+          errs() << "OMPExec StmtClass: " << cls << ":" << st->getStmtClassName() << "\n";
 	  associateEachLoopInside(OMPED, clauses);
 	}
-
+/*
 	if (isa<DoStmt>(st) || isa<ForStmt>(st) || isa<WhileStmt>(st)) {
           CreateLoopNode(st);
+          errs() << "Do StmtClass: " << cls << ":" << st->getStmtClassName() << "\n";
 	}
-
+*/
         return true;
     }
 };
@@ -867,6 +1044,7 @@ public:
       }
 	
       /*we need to remove the last ",\n" before write the json*/
+      outs() << "label detail\n" << currFile.labels << "\n";
       if (currFile.labels.size() >= 2)
       currFile.labels.erase(currFile.labels.end() - 2, currFile.labels.end());
       /*output graph in JSON notation*/
@@ -901,7 +1079,7 @@ public:
 
 class PragmaPluginAction : public PluginASTAction {
 protected:
-    bool ClDCSnippet = false;
+    bool ClDCSnippet = true;
 
     /*This gets called by Clang when it invokes our Plugin.
     Has to be unique pointer (this bit was a bitch to figure out*/
